@@ -20,12 +20,13 @@ jobs:
       - name: Authenticate with Salesforce
         run: |
           echo "${{ secrets.SF_JWT_KEY }}" > server.key
-          sfdx auth:jwt:grant \
+          sfdx force:auth:jwt:grant \   # ✅ Correct command
             --clientid ${{ secrets.SF_CONSUMER_KEY }} \
             --jwtkeyfile server.key \
             --username ${{ secrets.SF_USERNAME }} \
             --instanceurl ${{ secrets.SF_LOGIN_URL }} \
-            --setalias deployOrg
+            --setalias deployOrg \
+            --loglevel DEBUG
 
       - name: Deploy Metadata
         run: |
