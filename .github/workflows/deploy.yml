@@ -30,6 +30,6 @@ jobs:
       - name: Deploy Metadata
         run: |
           sfdx force:source:deploy \
-            --sourcepath force-app \
-            --targetusername deployOrg \
-            --testlevel RunLocalTests
+          --sourcepath force-app \
+          --targetusername ${{ secrets.SF_USERNAME }} \
+          --testlevel RunLocalTests
