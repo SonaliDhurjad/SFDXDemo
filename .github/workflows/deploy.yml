@@ -1,4 +1,4 @@
-name: Salesforce Delta Deployment
+name: Salesforce CI/CD - Conditional Test Run
 
 on:
   push:
@@ -10,18 +10,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0  # Required for git diff to work
+          fetch-depth: 0
 
-      - name: Install Salesforce CLI and plugins
+      - name: Set up Salesforce CLI
         run: |
           npm install -g sfdx-cli
-          sfdx plugins:install sfdx-git-delta
           sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Authenticate to Salesforce (JWT)
+      - name: Authenticate to Salesforce
         run: |
           echo "${{ secrets.SF_JWT_KEY }}" > server.key
           sfdx force:auth:jwt:grant \
@@ -31,34 +30,29 @@ jobs:
             --instanceurl ${{ secrets.SF_LOGIN_URL }} \
             --setalias deployOrg
 
-      - name: Generate Delta Package
+      - name: Determine if Apex was modified
+        id: apex-check
         run: |
-          mkdir delta
           if git rev-parse HEAD~1 >/dev/null 2>&1; then
-            sfdx sgd:source:delta --to HEAD --from HEAD~1 --output delta --generate-delta
+            CHANGED=$(git diff --name-only HEAD~1 HEAD | grep -E '\.cls$|\.trigger$' || true)
           else
-            # First commit or no previous commit found
-            cp -r force-app delta/
+            CHANGED="all"
           fi
 
-      - name: Determine Test Level
-        id: test-check
-        run: |
-          TEST_FILES=$(find delta/force-app -type f \( -name "*.cls" -o -name "*.trigger" \))
-          if [ -z "$TEST_FILES" ]; then
-            echo "No Apex files detected. Skipping tests."
+          if [ -z "$CHANGED" ]; then
+            echo "No Apex changes found."
             echo "TEST_LEVEL=NoTestRun" >> $GITHUB_ENV
           else
-            echo "Apex files changed. Running local tests."
+            echo "Apex changes found."
             echo "TEST_LEVEL=RunLocalTests" >> $GITHUB_ENV
           fi
 
       - name: Deploy to Salesforce
         run: |
-          echo "Deploying with test level: $TEST_LEVEL"
+          echo "Deploying from force-app with test level: $TEST_LEVEL"
 
           DEPLOY_RESULT=$(sfdx force:source:deploy \
-            --sourcepath delta/force-app \
+            --sourcepath force-app \
             --targetusername deployOrg \
             --testlevel $TEST_LEVEL \
             --json) || true
@@ -89,8 +83,6 @@ jobs:
           fi
 
           echo "=============================="
-
-          echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
 
           if [[ "$DEPLOY_ID" == "N/A" || -n "$ERROR_MSG" || -n "$COMPONENT_ERRORS" || -n "$TEST_ERRORS" ]]; then
             echo "Deployment failed."
