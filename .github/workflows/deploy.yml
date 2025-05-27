@@ -1,9 +1,9 @@
-name: Deploy to Salesforce
+name: Salesforce CI/CD Deploy
 
 on:
   push:
     branches:
-      - main  # Trigger on push to main
+      - main
 
 jobs:
   deploy:
@@ -31,7 +31,7 @@ jobs:
         run: sfdx force:org:list
 
       - name: Install jq
-        run: sudo apt-get install -y jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
       - name: Deploy metadata and capture deployment info
         run: |
@@ -43,28 +43,34 @@ jobs:
 
           echo "$DEPLOY_RESULT" > deploy-result.json
 
-          # Extract error message if any
+          DEPLOY_ID=$(echo "$DEPLOY_RESULT" | jq -r '.result.id // "N/A"')
           ERROR_MSG=$(echo "$DEPLOY_RESULT" | jq -r '.message // empty')
-
-          # Extract deployment ID (may not exist if deploy failed)
-          DEPLOY_ID=$(echo "$DEPLOY_RESULT" | jq -r '.result.id // empty')
-
-          # Extract any errors array (if present)
           ERRORS=$(echo "$DEPLOY_RESULT" | jq -r '.result?.errors[]? // empty')
+          TEST_FAILURES=$(echo "$DEPLOY_RESULT" | jq -r '.result?.details?.componentFailures[]? | "\(.componentName): \(.message)"')
 
-          echo "===== Deployment Result JSON ====="
-          cat deploy-result.json
-          echo "================================="
+          echo "===== Deployment Result ====="
+          echo "Deployment ID: $DEPLOY_ID"
+          echo "============================="
 
           if [[ -n "$ERROR_MSG" ]]; then
-            echo "Deployment failed with error: $ERROR_MSG"
-            if [[ -n "$ERRORS" ]]; then
-              echo "Detailed errors:"
-              echo "$ERRORS"
-            fi
+            echo "Error message: $ERROR_MSG"
+          fi
+
+          if [[ -n "$ERRORS" ]]; then
+            echo "Deployment errors:"
+            echo "$ERRORS"
+          fi
+
+          if [[ -n "$TEST_FAILURES" ]]; then
+            echo "Test Failures:"
+            echo "$TEST_FAILURES"
+          fi
+
+          if [[ -n "$ERROR_MSG" || -n "$ERRORS" || -n "$TEST_FAILURES" ]]; then
+            echo "Deployment failed."
             exit 1
           else
             echo "Deployment succeeded."
-            echo "Deployment ID: $DEPLOY_ID"
-            echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
           fi
+
+          echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
