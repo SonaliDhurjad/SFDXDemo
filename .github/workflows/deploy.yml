@@ -29,14 +29,31 @@ jobs:
       - name: Install jq for JSON parsing
         run: sudo apt-get update && sudo apt-get install -y jq
 
+      - name: Determine if Apex files are changed
+        id: test-skip-check
+        run: |
+          git fetch origin main
+          CHANGED=$(git diff --name-only HEAD~1 HEAD)
+          echo "$CHANGED" > changed_files.txt
+          echo "Changed files:"
+          echo "$CHANGED"
+          
+          if echo "$CHANGED" | grep -E '\.cls$|\.trigger$|\.apex$|cls-meta\.xml$'; then
+            echo "Apex code detected. Running tests."
+            echo "TEST_LEVEL=RunLocalTests" >> $GITHUB_ENV
+          else
+            echo "No Apex code detected. Skipping tests."
+            echo "TEST_LEVEL=NoTestRun" >> $GITHUB_ENV
+          fi
+
       - name: Deploy Metadata and Capture Output
         run: |
-          echo "Starting deployment..."
+          echo "Starting deployment with test level: $TEST_LEVEL"
 
           DEPLOY_RESULT=$(sfdx force:source:deploy \
             --sourcepath force-app \
             --targetusername deployOrg \
-            --testlevel RunLocalTests \
+            --testlevel $TEST_LEVEL \
             --json) || true
 
           echo "$DEPLOY_RESULT" > deploy-result.json
