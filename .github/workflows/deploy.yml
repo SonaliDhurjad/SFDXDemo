@@ -1,4 +1,4 @@
-name: Salesforce CI/CD Deploy
+name: Salesforce Delta Deployment
 
 on:
   push:
@@ -10,11 +10,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Required for git diff to work
 
-      - name: Install Salesforce CLI
-        run: npm install --global sfdx-cli
+      - name: Install Salesforce CLI and plugins
+        run: |
+          npm install -g sfdx-cli
+          sfdx plugins:install sfdx-git-delta
+          sudo apt-get update && sudo apt-get install -y jq
 
       - name: Authenticate to Salesforce (JWT)
         run: |
@@ -26,32 +31,34 @@ jobs:
             --instanceurl ${{ secrets.SF_LOGIN_URL }} \
             --setalias deployOrg
 
-      - name: Install jq for JSON parsing
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: Determine if Apex files are changed
-        id: test-skip-check
+      - name: Generate Delta Package
         run: |
-          git fetch origin main
-          CHANGED=$(git diff --name-only HEAD~1 HEAD)
-          echo "$CHANGED" > changed_files.txt
-          echo "Changed files:"
-          echo "$CHANGED"
-          
-          if echo "$CHANGED" | grep -E '\.cls$|\.trigger$|\.apex$|cls-meta\.xml$'; then
-            echo "Apex code detected. Running tests."
-            echo "TEST_LEVEL=RunLocalTests" >> $GITHUB_ENV
+          mkdir delta
+          if git rev-parse HEAD~1 >/dev/null 2>&1; then
+            sfdx sgd:source:delta --to HEAD --from HEAD~1 --output delta --generate-delta
           else
-            echo "No Apex code detected. Skipping tests."
-            echo "TEST_LEVEL=NoTestRun" >> $GITHUB_ENV
+            # First commit or no previous commit found
+            cp -r force-app delta/
           fi
 
-      - name: Deploy Metadata and Capture Output
+      - name: Determine Test Level
+        id: test-check
         run: |
-          echo "Starting deployment with test level: $TEST_LEVEL"
+          TEST_FILES=$(find delta/force-app -type f \( -name "*.cls" -o -name "*.trigger" \))
+          if [ -z "$TEST_FILES" ]; then
+            echo "No Apex files detected. Skipping tests."
+            echo "TEST_LEVEL=NoTestRun" >> $GITHUB_ENV
+          else
+            echo "Apex files changed. Running local tests."
+            echo "TEST_LEVEL=RunLocalTests" >> $GITHUB_ENV
+          fi
+
+      - name: Deploy to Salesforce
+        run: |
+          echo "Deploying with test level: $TEST_LEVEL"
 
           DEPLOY_RESULT=$(sfdx force:source:deploy \
-            --sourcepath force-app \
+            --sourcepath delta/force-app \
             --targetusername deployOrg \
             --testlevel $TEST_LEVEL \
             --json) || true
@@ -63,11 +70,12 @@ jobs:
           COMPONENT_ERRORS=$(jq -r '.result.details.componentFailures[]? | "\(.componentType) \(.fullName): \(.problem)"' deploy-result.json)
           TEST_ERRORS=$(jq -r '.result.details.runTestResult.failures[]? | "\(.name).\(.methodName): \(.message)"' deploy-result.json)
 
+          echo "===== Deployment Summary ====="
           echo "Deployment ID: $DEPLOY_ID"
-          echo "---------------------------"
+          echo ""
 
           if [[ -n "$ERROR_MSG" ]]; then
-            echo "Error Message: $ERROR_MSG"
+            echo "Error: $ERROR_MSG"
           fi
 
           if [[ -n "$COMPONENT_ERRORS" ]]; then
@@ -80,7 +88,7 @@ jobs:
             echo "$TEST_ERRORS"
           fi
 
-          echo "---------------------------"
+          echo "=============================="
 
           echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
 
