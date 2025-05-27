@@ -3,22 +3,19 @@ name: Deploy to Salesforce
 on:
   push:
     branches:
-      - main  # Trigger deployment only on pushes to main branch
+      - main  # Trigger on push to main
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout code from the repo
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # Step 2: Install Salesforce CLI
       - name: Install Salesforce CLI
         run: npm install --global sfdx-cli
 
-      # Step 3: Authenticate with Salesforce using JWT-based auth
       - name: Authenticate with Salesforce (JWT)
         run: |
           echo "${{ secrets.SF_JWT_KEY }}" > server.key
@@ -30,21 +27,44 @@ jobs:
             --setalias deployOrg \
             --loglevel DEBUG
 
-      # Step 4: Optional - verify the authenticated org
       - name: Verify authenticated org
         run: sfdx force:org:list
 
-      # Step 5: Deploy source code to Salesforce
-      - name: Deploy metadata to Salesforce
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      - name: Deploy metadata and capture deployment info
         run: |
           DEPLOY_RESULT=$(sfdx force:source:deploy \
             --sourcepath force-app \
             --targetusername deployOrg \
             --testlevel RunLocalTests \
-            --json)
-            
+            --json) || true
+
           echo "$DEPLOY_RESULT" > deploy-result.json
-          DEPLOY_ID=$(echo "$DEPLOY_RESULT" | jq -r '.result.id')
-          
-          echo "Deployment ID: $DEPLOY_ID"
-          echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
+
+          # Extract error message if any
+          ERROR_MSG=$(echo "$DEPLOY_RESULT" | jq -r '.message // empty')
+
+          # Extract deployment ID (may not exist if deploy failed)
+          DEPLOY_ID=$(echo "$DEPLOY_RESULT" | jq -r '.result.id // empty')
+
+          # Extract any errors array (if present)
+          ERRORS=$(echo "$DEPLOY_RESULT" | jq -r '.result?.errors[]? // empty')
+
+          echo "===== Deployment Result JSON ====="
+          cat deploy-result.json
+          echo "================================="
+
+          if [[ -n "$ERROR_MSG" ]]; then
+            echo "Deployment failed with error: $ERROR_MSG"
+            if [[ -n "$ERRORS" ]]; then
+              echo "Detailed errors:"
+              echo "$ERRORS"
+            fi
+            exit 1
+          else
+            echo "Deployment succeeded."
+            echo "Deployment ID: $DEPLOY_ID"
+            echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
+          fi
