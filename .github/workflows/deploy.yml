@@ -10,13 +10,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout Code
         uses: actions/checkout@v3
 
       - name: Install Salesforce CLI
         run: npm install --global sfdx-cli
 
-      - name: Authenticate with Salesforce (JWT)
+      - name: Authenticate to Salesforce (JWT)
         run: |
           echo "${{ secrets.SF_JWT_KEY }}" > server.key
           sfdx force:auth:jwt:grant \
@@ -24,17 +24,15 @@ jobs:
             --jwtkeyfile server.key \
             --username ${{ secrets.SF_USERNAME }} \
             --instanceurl ${{ secrets.SF_LOGIN_URL }} \
-            --setalias deployOrg \
-            --loglevel DEBUG
+            --setalias deployOrg
 
-      - name: Verify authenticated org
-        run: sfdx force:org:list
-
-      - name: Install jq
+      - name: Install jq for JSON parsing
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Deploy metadata and capture deployment info
+      - name: Deploy Metadata and Capture Output
         run: |
+          echo "Starting deployment..."
+
           DEPLOY_RESULT=$(sfdx force:source:deploy \
             --sourcepath force-app \
             --targetusername deployOrg \
@@ -43,34 +41,35 @@ jobs:
 
           echo "$DEPLOY_RESULT" > deploy-result.json
 
-          DEPLOY_ID=$(echo "$DEPLOY_RESULT" | jq -r '.result.id // "N/A"')
-          ERROR_MSG=$(echo "$DEPLOY_RESULT" | jq -r '.message // empty')
-          ERRORS=$(echo "$DEPLOY_RESULT" | jq -r '.result?.errors[]? // empty')
-          TEST_FAILURES=$(echo "$DEPLOY_RESULT" | jq -r '.result?.details?.componentFailures[]? | "\(.componentName): \(.message)"')
+          DEPLOY_ID=$(jq -r '.result.id // "N/A"' deploy-result.json)
+          ERROR_MSG=$(jq -r '.message // empty' deploy-result.json)
+          COMPONENT_ERRORS=$(jq -r '.result.details.componentFailures[]? | "\(.componentType) \(.fullName): \(.problem)"' deploy-result.json)
+          TEST_ERRORS=$(jq -r '.result.details.runTestResult.failures[]? | "\(.name).\(.methodName): \(.message)"' deploy-result.json)
 
-          echo "===== Deployment Result ====="
           echo "Deployment ID: $DEPLOY_ID"
-          echo "============================="
+          echo "---------------------------"
 
           if [[ -n "$ERROR_MSG" ]]; then
-            echo "Error message: $ERROR_MSG"
+            echo "Error Message: $ERROR_MSG"
           fi
 
-          if [[ -n "$ERRORS" ]]; then
-            echo "Deployment errors:"
-            echo "$ERRORS"
+          if [[ -n "$COMPONENT_ERRORS" ]]; then
+            echo "Component Errors:"
+            echo "$COMPONENT_ERRORS"
           fi
 
-          if [[ -n "$TEST_FAILURES" ]]; then
+          if [[ -n "$TEST_ERRORS" ]]; then
             echo "Test Failures:"
-            echo "$TEST_FAILURES"
+            echo "$TEST_ERRORS"
           fi
 
-          if [[ -n "$ERROR_MSG" || -n "$ERRORS" || -n "$TEST_FAILURES" ]]; then
+          echo "---------------------------"
+
+          echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
+
+          if [[ "$DEPLOY_ID" == "N/A" || -n "$ERROR_MSG" || -n "$COMPONENT_ERRORS" || -n "$TEST_ERRORS" ]]; then
             echo "Deployment failed."
             exit 1
           else
             echo "Deployment succeeded."
           fi
-
-          echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
