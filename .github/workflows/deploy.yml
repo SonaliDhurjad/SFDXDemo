@@ -37,7 +37,14 @@ jobs:
       # Step 5: Deploy source code to Salesforce
       - name: Deploy metadata to Salesforce
         run: |
-          sfdx force:source:deploy \
+          DEPLOY_RESULT=$(sfdx force:source:deploy \
             --sourcepath force-app \
             --targetusername deployOrg \
-            --testlevel RunLocalTests
+            --testlevel RunLocalTests \
+            --json)
+            
+          echo "$DEPLOY_RESULT" > deploy-result.json
+          DEPLOY_ID=$(echo "$DEPLOY_RESULT" | jq -r '.result.id')
+          
+          echo "Deployment ID: $DEPLOY_ID"
+          echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
