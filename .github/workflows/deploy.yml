@@ -18,25 +18,26 @@ jobs:
           git fetch --prune --unshallow || true
           git fetch origin main
 
-      - name: Detect Apex Changes
-        id: detect_apex
+      - name: Detect Changed Apex Test Classes
+        id: detect_tests
         run: |
-          echo "Checking for Apex class/trigger changes..."
-          git fetch --prune --unshallow || true
+          echo "Checking for changed Apex test classes..."
           git fetch origin main
-
-          # Use GitHub-provided SHA for previous commit
-          git diff --name-only ${{ github.event.before }} ${{ github.sha }} > changed_files.txt || true
+          git diff --name-only origin/main > changed_files.txt
           cat changed_files.txt
 
-          APEX_CHANGED=$(grep -E '\.cls$|\.trigger$' changed_files.txt || true)
-          if [[ -n "$APEX_CHANGED" ]]; then
-            echo "Apex changes detected."
-            echo "TEST_LEVEL=RunLocalTests" >> $GITHUB_ENV
+          TEST_CLASSES=$(grep -E '.*Test\.cls$' changed_files.txt | sed 's/.*\///;s/\.cls$//' | paste -sd, -)
+
+          if [[ -n "$TEST_CLASSES" ]]; then
+            echo "Detected test classes: $TEST_CLASSES"
+            echo "TEST_CLASSES=$TEST_CLASSES" >> $GITHUB_ENV
+            echo "TEST_LEVEL=RunSpecifiedTests" >> $GITHUB_ENV
           else
-            echo "No Apex changes found."
+            echo "No specific test classes detected. Skipping test run."
+            echo "TEST_CLASSES=" >> $GITHUB_ENV
             echo "TEST_LEVEL=NoTestRun" >> $GITHUB_ENV
           fi
+
 
       - name: Install Salesforce CLI
         run: npm install --global sfdx-cli
@@ -58,11 +59,14 @@ jobs:
         run: |
           echo "Starting deployment with test level: $TEST_LEVEL"
 
-          DEPLOY_RESULT=$(sfdx force:source:deploy \
-            --sourcepath force-app \
-            --targetusername deployOrg \
-            --testlevel $TEST_LEVEL \
-            --json) || true
+          DEPLOY_CMD="sfdx force:source:deploy --sourcepath force-app --targetusername deployOrg --testlevel $TEST_LEVEL --json"
+
+          if [[ "$TEST_LEVEL" == "RunSpecifiedTests" && -n "$TEST_CLASSES" ]]; then
+            DEPLOY_CMD="$DEPLOY_CMD --tests $TEST_CLASSES"
+          fi
+
+          echo "Running command: $DEPLOY_CMD"
+          DEPLOY_RESULT=$($DEPLOY_CMD) || true
 
           echo "$DEPLOY_RESULT" > deploy-result.json
 
@@ -70,12 +74,14 @@ jobs:
           ERROR_MSG=$(jq -r '.message // empty' deploy-result.json)
           COMPONENT_ERRORS=$(jq -r '.result.details.componentFailures[]? | "\(.componentType) \(.fullName): \(.problem)"' deploy-result.json)
           TEST_ERRORS=$(jq -r '.result.details.runTestResult.failures[]? | "\(.name).\(.methodName): \(.message)"' deploy-result.json)
+          DEPLOY_STATUS=$(jq -r '.status // 1' deploy-result.json)
 
           echo "===== Deployment Summary ====="
           echo "Deployment ID: $DEPLOY_ID"
 
           if [[ -n "$ERROR_MSG" ]]; then
-            echo "Error Message: $ERROR_MSG"
+            echo "Error Message:"
+            echo "$ERROR_MSG"
           fi
 
           if [[ -n "$COMPONENT_ERRORS" ]]; then
@@ -90,9 +96,9 @@ jobs:
 
           echo "==============================="
 
-          DEPLOY_STATUS=$(jq -r '.status // 0' deploy-result.json)
+          echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
 
-          if [[ "$DEPLOY_STATUS" -ne 0 ]]; then
+          if [[ "$DEPLOY_ID" == "N/A" || "$DEPLOY_STATUS" -ne 0 || -n "$ERROR_MSG" || -n "$COMPONENT_ERRORS" || -n "$TEST_ERRORS" ]]; then
             echo "Deployment failed due to errors."
             exit 1
           else
