@@ -18,23 +18,23 @@ jobs:
           git fetch --prune --unshallow || true
           git fetch origin main
 
-      - name: Detect Changed Apex Test Classes
-        id: detect_tests
+      - name: Detect Apex Changes and Set Test Level
+        id: detect_apex
         run: |
-          echo "Checking for changed Apex test classes..."
+          echo "Checking for Apex changes..."
           git fetch origin main
           git diff --name-only origin/main > changed_files.txt
           cat changed_files.txt
 
-          TEST_CLASSES=$(grep -E '.*Test\.cls$' changed_files.txt | sed 's/.*\///;s/\.cls$//' | paste -sd, -)
+          APEX_FILES=$(grep -E '\.cls$|\.trigger$' changed_files.txt || true)
+          TEST_CLASSES=$(echo "$APEX_FILES" | grep -o '[^/]*\.cls' | sed 's/\.cls//' | tr '\n' ',' | sed 's/,$//')
 
           if [[ -n "$TEST_CLASSES" ]]; then
-            echo "Detected test classes: $TEST_CLASSES"
-            echo "TEST_CLASSES=$TEST_CLASSES" >> $GITHUB_ENV
+            echo "Detected test-relevant classes: $TEST_CLASSES"
             echo "TEST_LEVEL=RunSpecifiedTests" >> $GITHUB_ENV
+            echo "TEST_CLASSES=$TEST_CLASSES" >> $GITHUB_ENV
           else
-            echo "No specific test classes detected. Skipping test run."
-            echo "TEST_CLASSES=" >> $GITHUB_ENV
+            echo "No Apex changes found."
             echo "TEST_LEVEL=NoTestRun" >> $GITHUB_ENV
           fi
 
