@@ -1,4 +1,4 @@
-name: Deploy to Salesforce (Delta Aware)
+name: Salesforce Delta Deployment
 
 on:
   push:
@@ -7,28 +7,27 @@ on:
 
 jobs:
   deploy:
-    name: Salesforce Deployment
+    name: Deploy to Salesforce
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up Node and SFDX CLI
+      - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
           node-version: 18
 
       - name: Install Salesforce CLI
-        run: |
-          npm install --global sfdx-cli
-          sfdx --version
+        run: npm install --global sfdx-cli
 
       - name: Install sfdx-git-delta plugin
-        run: |
-          sfdx plugins:install sfdx-git-delta
+        run: sfdx plugins:install sfdx-git-delta
 
-      - name: Authenticate with JWT
+      - name: Authenticate to Salesforce (JWT)
+        env:
+          SFDC_JWT_KEY: ${{ secrets.SFDC_JWT_KEY }}
         run: |
           echo "$SFDC_JWT_KEY" > server.key
           sfdx force:auth:jwt:grant \
@@ -37,10 +36,8 @@ jobs:
             --username ${{ secrets.SFDC_USERNAME }} \
             --instanceurl https://login.salesforce.com \
             --setalias deployOrg
-        env:
-          SFDC_JWT_KEY: ${{ secrets.SFDC_JWT_KEY }}
 
-      - name: Detect Apex changes
+      - name: Generate delta package
         id: delta
         run: |
           git fetch origin main --depth=2
@@ -50,7 +47,7 @@ jobs:
           APEX_CHANGED=$(find delta/force-app -type f \( -name "*.cls" -o -name "*.trigger" \) | wc -l)
           echo "APEX_CHANGED=$APEX_CHANGED" >> $GITHUB_ENV
 
-      - name: Set test level based on delta
+      - name: Set test level dynamically
         run: |
           if [ "$APEX_CHANGED" -gt 0 ]; then
             echo "TEST_LEVEL=RunLocalTests" >> $GITHUB_ENV
@@ -60,10 +57,10 @@ jobs:
 
       - name: Deploy to Salesforce
         run: |
-          echo "Deploying from force-app with test level: $TEST_LEVEL"
-
+          echo "Deploying with test level: $TEST_LEVEL"
+          DEPLOY_DIR="force-app"
           sfdx force:source:deploy \
-            --sourcepath force-app \
+            --sourcepath $DEPLOY_DIR \
             --targetusername deployOrg \
             --testlevel $TEST_LEVEL \
             --json > deploy-result.json || echo "Deployment command failed."
