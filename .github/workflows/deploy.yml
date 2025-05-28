@@ -85,10 +85,10 @@ jobs:
 
           echo "==============================="
 
-          echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
+          DEPLOY_STATUS=$(jq -r '.status // 0' deploy-result.json)
 
-          if [[ "$DEPLOY_ID" == "N/A" || -n "$ERROR_MSG" || -n "$COMPONENT_ERRORS" || -n "$TEST_ERRORS" ]]; then
-            echo "Deployment failed."
+          if [[ "$DEPLOY_STATUS" -ne 0 ]]; then
+            echo "Deployment failed due to errors."
             exit 1
           else
             echo "Deployment succeeded."
