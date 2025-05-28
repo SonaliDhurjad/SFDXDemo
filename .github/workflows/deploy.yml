@@ -22,11 +22,10 @@ jobs:
         id: detect_apex
         run: |
           echo "Checking for Apex class/trigger changes..."
-          git diff --name-only HEAD~1 HEAD > changed_files.txt
+          git diff --name-only origin/main HEAD > changed_files.txt
           cat changed_files.txt
 
-          APEX_CHANGED=$(grep -E '\.cls$|\.trigger$' changed_files.txt || true)
-          if [[ -n "$APEX_CHANGED" ]]; then
+          if grep -E '\.cls$|\.trigger$' changed_files.txt > /dev/null; then
             echo "APEX changes detected."
             echo "TEST_LEVEL=RunLocalTests" >> $GITHUB_ENV
           else
@@ -41,10 +40,10 @@ jobs:
         run: |
           echo "${{ secrets.SF_JWT_KEY }}" > server.key
           sfdx force:auth:jwt:grant \
-            --clientid ${{ secrets.SF_CONSUMER_KEY }} \
+            --clientid "${{ secrets.SF_CONSUMER_KEY }}" \
             --jwtkeyfile server.key \
-            --username ${{ secrets.SF_USERNAME }} \
-            --instanceurl ${{ secrets.SF_LOGIN_URL }} \
+            --username "${{ secrets.SF_USERNAME }}" \
+            --instanceurl "${{ secrets.SF_LOGIN_URL }}" \
             --setalias deployOrg
 
       - name: Install jq for JSON parsing
@@ -52,7 +51,7 @@ jobs:
 
       - name: Deploy Metadata and Capture Output
         run: |
-          echo "Starting deployment..."
+          echo "Starting deployment with test level: $TEST_LEVEL"
 
           DEPLOY_RESULT=$(sfdx force:source:deploy \
             --sourcepath force-app \
@@ -67,8 +66,8 @@ jobs:
           COMPONENT_ERRORS=$(jq -r '.result.details.componentFailures[]? | "\(.componentType) \(.fullName): \(.problem)"' deploy-result.json)
           TEST_ERRORS=$(jq -r '.result.details.runTestResult.failures[]? | "\(.name).\(.methodName): \(.message)"' deploy-result.json)
 
+          echo "===== Deployment Summary ====="
           echo "Deployment ID: $DEPLOY_ID"
-          echo "---------------------------"
 
           if [[ -n "$ERROR_MSG" ]]; then
             echo "Error Message: $ERROR_MSG"
@@ -84,7 +83,7 @@ jobs:
             echo "$TEST_ERRORS"
           fi
 
-          echo "---------------------------"
+          echo "==============================="
 
           echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
 
