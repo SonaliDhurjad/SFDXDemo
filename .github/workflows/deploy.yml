@@ -22,7 +22,6 @@ jobs:
         id: detect_apex
         run: |
           echo "Checking for Apex changes..."
-          git fetch origin main
           git diff --name-only origin/main > changed_files.txt
           cat changed_files.txt
 
@@ -37,7 +36,6 @@ jobs:
             echo "No Apex changes found."
             echo "TEST_LEVEL=NoTestRun" >> $GITHUB_ENV
           fi
-
 
       - name: Install Salesforce CLI
         run: npm install --global sfdx-cli
@@ -55,14 +53,21 @@ jobs:
       - name: Install jq for JSON parsing
         run: sudo apt-get update && sudo apt-get install -y jq
 
+      - name: Convert Source to Metadata Format
+        run: |
+          mkdir mdapi_output
+          sfdx force:source:convert --rootdir force-app --outputdir mdapi_output
+
       - name: Deploy Metadata and Capture Output
         run: |
           echo "Starting deployment with test level: $TEST_LEVEL"
 
-          DEPLOY_CMD="sfdx force:source:deploy --sourcepath force-app --targetusername deployOrg --testlevel $TEST_LEVEL --json"
+          DEPLOY_CMD="sfdx force:mdapi:deploy --deploydir mdapi_output --targetusername deployOrg --wait 10 --json"
 
           if [[ "$TEST_LEVEL" == "RunSpecifiedTests" && -n "$TEST_CLASSES" ]]; then
-            DEPLOY_CMD="$DEPLOY_CMD --tests $TEST_CLASSES"
+            DEPLOY_CMD="$DEPLOY_CMD --testlevel RunSpecifiedTests --tests $TEST_CLASSES"
+          else
+            DEPLOY_CMD="$DEPLOY_CMD --testlevel $TEST_LEVEL"
           fi
 
           echo "Running command: $DEPLOY_CMD"
