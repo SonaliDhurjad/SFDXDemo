@@ -3,7 +3,7 @@ public class MySampleApexClassTest {
     
     @isTest
     static void testGetCalculatedValue() {
-        // Call the method
+        // Call the method new
         Integer result = MySampleApexClass.getCalculatedValue();
 
         // Assert the expected result
