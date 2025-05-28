@@ -1,4 +1,4 @@
-name: Salesforce Delta Deployment
+name: Salesforce CI/CD Deploy
 
 on:
   push:
@@ -7,94 +7,67 @@ on:
 
 jobs:
   deploy:
-    name: Deploy to Salesforce
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: 18
+      - name: Checkout Code
+        uses: actions/checkout@v3
 
       - name: Install Salesforce CLI
         run: npm install --global sfdx-cli
 
-      - name: Install sfdx-git-delta plugin
-        run: sfdx plugins:install sfdx-git-delta
-
       - name: Authenticate to Salesforce (JWT)
-        env:
-          SFDC_JWT_KEY: ${{ secrets.SFDC_JWT_KEY }}
         run: |
-          echo "$SFDC_JWT_KEY" > server.key
+          echo "${{ secrets.SF_JWT_KEY }}" > server.key
           sfdx force:auth:jwt:grant \
-            --clientid ${{ secrets.SFDC_CLIENT_ID }} \
+            --clientid ${{ secrets.SF_CONSUMER_KEY }} \
             --jwtkeyfile server.key \
-            --username ${{ secrets.SFDC_USERNAME }} \
-            --instanceurl https://login.salesforce.com \
+            --username ${{ secrets.SF_USERNAME }} \
+            --instanceurl ${{ secrets.SF_LOGIN_URL }} \
             --setalias deployOrg
 
-      - name: Generate delta package
-        id: delta
-        run: |
-          git fetch origin main --depth=2
-          mkdir delta
-          sfdx sgd:source:delta --to HEAD --from HEAD~1 --output delta
+      - name: Install jq for JSON parsing
+        run: sudo apt-get update && sudo apt-get install -y jq
 
-          APEX_CHANGED=$(find delta/force-app -type f \( -name "*.cls" -o -name "*.trigger" \) | wc -l)
-          echo "APEX_CHANGED=$APEX_CHANGED" >> $GITHUB_ENV
-
-      - name: Set test level dynamically
+      - name: Deploy Metadata and Capture Output
         run: |
-          if [ "$APEX_CHANGED" -gt 0 ]; then
-            echo "TEST_LEVEL=RunLocalTests" >> $GITHUB_ENV
-          else
-            echo "TEST_LEVEL=NoTestRun" >> $GITHUB_ENV
-          fi
+          echo "Starting deployment..."
 
-      - name: Deploy to Salesforce
-        run: |
-          echo "Deploying with test level: $TEST_LEVEL"
-          DEPLOY_DIR="force-app"
-          sfdx force:source:deploy \
-            --sourcepath $DEPLOY_DIR \
+          DEPLOY_RESULT=$(sfdx force:source:deploy \
+            --sourcepath force-app \
             --targetusername deployOrg \
-            --testlevel $TEST_LEVEL \
-            --json > deploy-result.json || echo "Deployment command failed."
+            --testlevel RunLocalTests \
+            --json) || true
 
-          echo "===== Raw Deployment JSON ====="
-          cat deploy-result.json
-          echo "================================"
+          echo "$DEPLOY_RESULT" > deploy-result.json
 
           DEPLOY_ID=$(jq -r '.result.id // "N/A"' deploy-result.json)
-          STATUS=$(jq -r '.status // .name // "Unknown"' deploy-result.json)
-          MESSAGE=$(jq -r '.message // "No message provided."' deploy-result.json)
-
-          echo "===== Deployment Summary ====="
-          echo "Deployment ID: $DEPLOY_ID"
-          echo "Status: $STATUS"
-          echo "Message: $MESSAGE"
-          echo ""
-
+          ERROR_MSG=$(jq -r '.message // empty' deploy-result.json)
           COMPONENT_ERRORS=$(jq -r '.result.details.componentFailures[]? | "\(.componentType) \(.fullName): \(.problem)"' deploy-result.json)
           TEST_ERRORS=$(jq -r '.result.details.runTestResult.failures[]? | "\(.name).\(.methodName): \(.message)"' deploy-result.json)
 
-          if [ -n "$COMPONENT_ERRORS" ]; then
+          echo "Deployment ID: $DEPLOY_ID"
+          echo "---------------------------"
+
+          if [[ -n "$ERROR_MSG" ]]; then
+            echo "Error Message: $ERROR_MSG"
+          fi
+
+          if [[ -n "$COMPONENT_ERRORS" ]]; then
             echo "Component Errors:"
             echo "$COMPONENT_ERRORS"
           fi
 
-          if [ -n "$TEST_ERRORS" ]; then
+          if [[ -n "$TEST_ERRORS" ]]; then
             echo "Test Failures:"
             echo "$TEST_ERRORS"
           fi
 
-          echo "=============================="
+          echo "---------------------------"
 
-          if [[ "$DEPLOY_ID" == "N/A" || "$STATUS" == "Failed" || -n "$COMPONENT_ERRORS" || -n "$TEST_ERRORS" ]]; then
+          echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
+
+          if [[ "$DEPLOY_ID" == "N/A" || -n "$ERROR_MSG" || -n "$COMPONENT_ERRORS" || -n "$TEST_ERRORS" ]]; then
             echo "Deployment failed."
             exit 1
           else
