@@ -18,15 +18,20 @@ jobs:
           git fetch --prune --unshallow || true
           git fetch origin main
 
-      - name: Detect Apex Changes
+            - name: Detect Apex Changes
         id: detect_apex
         run: |
           echo "Checking for Apex class/trigger changes..."
-          git diff --name-only origin/main HEAD > changed_files.txt
+          git fetch --prune --unshallow || true
+          git fetch origin main
+
+          # Use GitHub-provided SHA for previous commit
+          git diff --name-only ${{ github.event.before }} ${{ github.sha }} > changed_files.txt || true
           cat changed_files.txt
 
-          if grep -E '\.cls$|\.trigger$' changed_files.txt > /dev/null; then
-            echo "APEX changes detected."
+          APEX_CHANGED=$(grep -E '\.cls$|\.trigger$' changed_files.txt || true)
+          if [[ -n "$APEX_CHANGED" ]]; then
+            echo "Apex changes detected."
             echo "TEST_LEVEL=RunLocalTests" >> $GITHUB_ENV
           else
             echo "No Apex changes found."
