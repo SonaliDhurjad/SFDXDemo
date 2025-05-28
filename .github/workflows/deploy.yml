@@ -1,4 +1,4 @@
-name: Salesforce CI/CD - Conditional Test Run
+name: Deploy to Salesforce (Delta Aware)
 
 on:
   push:
@@ -7,84 +7,97 @@ on:
 
 jobs:
   deploy:
+    name: Salesforce Deployment
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
+      - name: Set up Node and SFDX CLI
+        uses: actions/setup-node@v3
         with:
-          fetch-depth: 0
+          node-version: 18
 
-      - name: Set up Salesforce CLI
+      - name: Install Salesforce CLI
         run: |
-          npm install -g sfdx-cli
-          sudo apt-get update && sudo apt-get install -y jq
+          npm install --global sfdx-cli
+          sfdx --version
 
-      - name: Authenticate to Salesforce
+      - name: Install sfdx-git-delta plugin
         run: |
-          echo "${{ secrets.SF_JWT_KEY }}" > server.key
+          sfdx plugins:install sfdx-git-delta
+
+      - name: Authenticate with JWT
+        run: |
+          echo "$SFDC_JWT_KEY" > server.key
           sfdx force:auth:jwt:grant \
-            --clientid ${{ secrets.SF_CONSUMER_KEY }} \
+            --clientid ${{ secrets.SFDC_CLIENT_ID }} \
             --jwtkeyfile server.key \
-            --username ${{ secrets.SF_USERNAME }} \
-            --instanceurl ${{ secrets.SF_LOGIN_URL }} \
+            --username ${{ secrets.SFDC_USERNAME }} \
+            --instanceurl https://login.salesforce.com \
             --setalias deployOrg
+        env:
+          SFDC_JWT_KEY: ${{ secrets.SFDC_JWT_KEY }}
 
-      - name: Determine if Apex was modified
-        id: apex-check
+      - name: Detect Apex changes
+        id: delta
         run: |
-          if git rev-parse HEAD~1 >/dev/null 2>&1; then
-            CHANGED=$(git diff --name-only HEAD~1 HEAD | grep -E '\.cls$|\.trigger$' || true)
-          else
-            CHANGED="all"
-          fi
+          git fetch origin main --depth=2
+          mkdir delta
+          sfdx sgd:source:delta --to HEAD --from HEAD~1 --output delta
 
-          if [ -z "$CHANGED" ]; then
-            echo "No Apex changes found."
-            echo "TEST_LEVEL=NoTestRun" >> $GITHUB_ENV
-          else
-            echo "Apex changes found."
+          APEX_CHANGED=$(find delta/force-app -type f \( -name "*.cls" -o -name "*.trigger" \) | wc -l)
+          echo "APEX_CHANGED=$APEX_CHANGED" >> $GITHUB_ENV
+
+      - name: Set test level based on delta
+        run: |
+          if [ "$APEX_CHANGED" -gt 0 ]; then
             echo "TEST_LEVEL=RunLocalTests" >> $GITHUB_ENV
+          else
+            echo "TEST_LEVEL=NoTestRun" >> $GITHUB_ENV
           fi
 
       - name: Deploy to Salesforce
         run: |
           echo "Deploying from force-app with test level: $TEST_LEVEL"
 
-          DEPLOY_RESULT=$(sfdx force:source:deploy \
+          sfdx force:source:deploy \
             --sourcepath force-app \
             --targetusername deployOrg \
             --testlevel $TEST_LEVEL \
-            --json) || true
+            --json > deploy-result.json || echo "Deployment command failed."
 
-          echo "$DEPLOY_RESULT" > deploy-result.json
+          echo "===== Raw Deployment JSON ====="
+          cat deploy-result.json
+          echo "================================"
 
           DEPLOY_ID=$(jq -r '.result.id // "N/A"' deploy-result.json)
-          ERROR_MSG=$(jq -r '.message // empty' deploy-result.json)
-          COMPONENT_ERRORS=$(jq -r '.result.details.componentFailures[]? | "\(.componentType) \(.fullName): \(.problem)"' deploy-result.json)
-          TEST_ERRORS=$(jq -r '.result.details.runTestResult.failures[]? | "\(.name).\(.methodName): \(.message)"' deploy-result.json)
+          STATUS=$(jq -r '.status // .name // "Unknown"' deploy-result.json)
+          MESSAGE=$(jq -r '.message // "No message provided."' deploy-result.json)
 
           echo "===== Deployment Summary ====="
           echo "Deployment ID: $DEPLOY_ID"
+          echo "Status: $STATUS"
+          echo "Message: $MESSAGE"
           echo ""
 
-          if [[ -n "$ERROR_MSG" ]]; then
-            echo "Error: $ERROR_MSG"
-          fi
+          COMPONENT_ERRORS=$(jq -r '.result.details.componentFailures[]? | "\(.componentType) \(.fullName): \(.problem)"' deploy-result.json)
+          TEST_ERRORS=$(jq -r '.result.details.runTestResult.failures[]? | "\(.name).\(.methodName): \(.message)"' deploy-result.json)
 
-          if [[ -n "$COMPONENT_ERRORS" ]]; then
+          if [ -n "$COMPONENT_ERRORS" ]; then
             echo "Component Errors:"
             echo "$COMPONENT_ERRORS"
           fi
 
-          if [[ -n "$TEST_ERRORS" ]]; then
+          if [ -n "$TEST_ERRORS" ]; then
             echo "Test Failures:"
             echo "$TEST_ERRORS"
           fi
 
           echo "=============================="
 
-          if [[ "$DEPLOY_ID" == "N/A" || -n "$ERROR_MSG" || -n "$COMPONENT_ERRORS" || -n "$TEST_ERRORS" ]]; then
+          if [[ "$DEPLOY_ID" == "N/A" || "$STATUS" == "Failed" || -n "$COMPONENT_ERRORS" || -n "$TEST_ERRORS" ]]; then
             echo "Deployment failed."
             exit 1
           else
