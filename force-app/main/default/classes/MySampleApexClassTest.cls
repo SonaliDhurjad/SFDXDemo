@@ -6,7 +6,7 @@ public class MySampleApexClassTest {
         // Call the method new
         Integer result = MySampleApexClass.getCalculatedValue();
 
-        // Assert the expected result
+        // Assert the expected result new
         System.assertEquals(10, result, 'Expected myValue to be incremented by 10');
 
         // Optionally, call again to verify cumulative effect
